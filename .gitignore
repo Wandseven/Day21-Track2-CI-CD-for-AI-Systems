@@ -1,13 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# MLflow
+mlruns/
 mlflow.db
-mlartifacts/
+
+# DVC
+/data/train_phase1.csv
+/data/eval.csv
+.dvc/cache/
+.dvc/tmp/
+
+# App Artifacts
 models/
 outputs/
-data/train_phase1.csv
-data/eval.csv
-data/train_phase2.csv
-sa-key.json
-.env
-.venv/
-__pycache__/
-*.pyc
+
+# OS & IDE
 .DS_Store
+.vscode/
+.idea/
+
+# Security & Keys
+*.pem
+mlops_deploy
+mlops_deploy.pub
+Token.txt
+lab_config.md
+
+# Lab Metadata
+HANDOFF.md

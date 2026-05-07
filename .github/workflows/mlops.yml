@@ -7,6 +7,7 @@ on:
       - 'data/**.dvc'
       - 'src/**.py'
       - 'params.yaml'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 jobs:
@@ -14,8 +15,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # JOB 1 - UNIT TEST
   # Chay unit tests tren du lieu ao (khong can ket noi cloud storage).
-  # Neu co bat ky test nao that bai, pipeline dung lai o day va khong tien hanh
-  # huan luyen hay trien khai.
+  # Neu co bat ky test nao that bai, pipeline dung lai o day.
   # ---------------------------------------------------------------------------
   test:
     name: Unit Test
@@ -31,13 +31,12 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run unit tests
-        # TODO 1: Viet lenh de chay pytest tren thu muc tests/ voi co -v
-        run: # <dien lenh o day>
+        run: pytest tests/ -v
 
 
   # ---------------------------------------------------------------------------
   # JOB 2 - TRAIN
-  # Xac thuc cloud storage, pull du lieu bang DVC, huan luyen mo hinh, upload artifact.
+  # Xac thuc AWS, pull du lieu bang DVC, huan luyen, upload artifact len S3.
   # Chi chay khi Job 1 (Unit Test) hoan thanh thanh cong.
   # ---------------------------------------------------------------------------
   train:
@@ -46,6 +45,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       accuracy: ${{ steps.read_metrics.outputs.accuracy }}
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUD_CREDENTIALS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUD_CREDENTIALS_SECRET }}
+      AWS_DEFAULT_REGION: us-east-1
+      S3_BUCKET: ${{ secrets.CLOUD_BUCKET }}
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
@@ -57,83 +65,76 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Authenticate to Cloud Storage
-        # TODO 2: Ghi noi dung credentials ra file tam va set bien moi truong xac thuc.
-        # GCP:   echo '${{ secrets.CLOUD_CREDENTIALS }}' > /tmp/sa-key.json
-        #        echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json" >> $GITHUB_ENV
-        # AWS:   echo "AWS_ACCESS_KEY_ID=..." >> $GITHUB_ENV  (lay tu secrets)
-        #        echo "AWS_SECRET_ACCESS_KEY=..." >> $GITHUB_ENV
-        # Azure: echo "AZURE_STORAGE_CONNECTION_STRING=..." >> $GITHUB_ENV
-        run: |
-          # <dien code o day>
-
       - name: Pull data with DVC
-        # TODO 3: Pull cac file du lieu can thiet tu cloud storage bang lenh dvc pull.
-        #         Chi pull train_phase1.csv va eval.csv (khong can train_phase2.csv).
-        run: # <dien lenh o day>
+        run: dvc pull data/train_phase1.csv.dvc data/eval.csv.dvc
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUD_CREDENTIALS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUD_CREDENTIALS_SECRET }}
 
       - name: Train model
         run: python src/train.py
 
       - name: Read metrics
         id: read_metrics
-        # TODO 4: Doc gia tri "accuracy" tu outputs/metrics.json bang Python inline.
-        #         Set ket qua thanh output "accuracy" de job deploy co the doc.
-        #
-        # Goi y:
-        #   ACC=$(python -c "import json; d=json.load(open('outputs/metrics.json')); print(d['accuracy'])")
-        #   echo "accuracy=$ACC" >> $GITHUB_OUTPUT
         run: |
-          # <dien code o day>
+          ACC=$(python -c "import json; d=json.load(open('outputs/metrics.json')); print(d['accuracy'])")
+          echo "accuracy=$ACC" >> $GITHUB_OUTPUT
 
-      - name: Upload model to Cloud Storage
-        # TODO 5: Su dung cloud SDK de upload models/model.pkl len
-        #         <bucket>/models/latest/model.pkl.
-        #         Ten bucket lay tu secret CLOUD_BUCKET.
-        run: |
-          python - <<'EOF'
-          # <dien code Python o day>
-          EOF
+      - name: Upload model to S3
+        run: aws s3 cp models/model.pkl s3://$S3_BUCKET/models/latest/model.pkl
 
-      - name: Save metrics as artifact
+      - name: Save latest metrics to S3 (for future comparison)
+        run: aws s3 cp outputs/metrics.json s3://$S3_BUCKET/metrics/latest.json
+
+      - name: Save metrics and report as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: metrics
-          path: outputs/metrics.json
+          name: model-performance
+          path: |
+            outputs/metrics.json
+            outputs/report.txt
 
 
   # ---------------------------------------------------------------------------
   # JOB 3 - EVAL
   # Kiem tra nguong chat luong (accuracy >= 0.70).
   # Pipeline dung lai o day neu mo hinh chua dat yeu cau.
-  # Chi chay khi Job 2 (Train) hoan thanh thanh cong.
   # ---------------------------------------------------------------------------
   eval:
     name: Eval
     needs: train
     runs-on: ubuntu-latest
     steps:
+      - name: Download metrics
+        uses: actions/download-artifact@v4
+        with:
+          name: model-performance
 
       - name: Check eval gate
-        # TODO 6: Doc accuracy tu output cua job train.
-        #         Neu accuracy < 0.70, ket thuc voi loi ro rang.
-        #         Neu dat nguong, in thong bao va tiep tuc.
-        #
-        # Goi y:
-        #   acc = float("${{ needs.train.outputs.accuracy }}")
-        #   if acc < 0.70:
-        #       raise SystemExit(f"FAILED: accuracy {acc:.4f} < 0.70. Huy deploy.")
-        #   print("PASSED: dang trien khai model.")
         run: |
-          python - <<'EOF'
-          # <dien code Python o day>
-          EOF
+          ACCURACY=$(jq -r '.accuracy' metrics.json)
+          DEGRADED=$(jq -r '.degraded' metrics.json)
+          echo "Current accuracy: $ACCURACY"
+          echo "Is degraded: $DEGRADED"
+          
+          # Gate 1: Accuracy threshold
+          if (( $(echo "$ACCURACY < 0.70" | bc -l) )); then
+            echo "❌ FAILED: Accuracy $ACCURACY is below 0.70 threshold."
+            exit 1
+          fi
+          
+          # Gate 2: No regression (Bonus 4)
+          if [ "$DEGRADED" == "true" ]; then
+            echo "❌ FAILED: Accuracy has decreased compared to previous version. Deploy cancelled."
+            exit 1
+          fi
+          
+          echo "✅ SUCCESS: Model cleared all quality gates."
 
 
   # ---------------------------------------------------------------------------
   # JOB 4 - DEPLOY
-  # Trien khai len VM qua SSH.
-  # Chi chay khi Job 3 (Eval) hoan thanh thanh cong.
+  # Trien khai len EC2 VM qua SSH sau khi eval gate qua.
   # ---------------------------------------------------------------------------
   deploy:
     name: Deploy
@@ -148,12 +149,17 @@ jobs:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
           script: |
-            # TODO 7: Restart service mlops-serve tren VM.
-            # TODO 8: Cho server san sang roi goi curl /health de xac nhan.
-            #         Neu health check that bai sau nhieu lan thu, thoat voi exit 1.
-            #
-            # Goi y:
-            #   sudo systemctl restart mlops-serve
-            #   sleep 5
-            #   curl -sf http://localhost:8000/health && echo "Health check passed." || exit 1
-            # <dien lenh bash o day>
+            sudo systemctl restart mlops-serve
+            echo "Waiting for service to start and download model (up to 2 mins)..."
+            for i in {1..12}; do
+              if curl -sf http://localhost:8000/health; then
+                echo "Health check passed!"
+                exit 0
+              fi
+              echo "Still waiting for health check... ($i/12)"
+              sleep 10
+            done
+            echo "Health check failed after 2 minutes."
+            sudo systemctl status mlops-serve
+            sudo journalctl -u mlops-serve -n 20
+            exit 1
