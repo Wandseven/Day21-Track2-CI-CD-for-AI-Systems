@@ -1,79 +1,82 @@
-import mlflow
-import mlflow.sklearn
 import pandas as pd
 import yaml
-import json
+import mlflow
+import mlflow.sklearn
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
 import joblib
 import os
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, f1_score
+import json
 
-EVAL_THRESHOLD = 0.70
+def train():
+    # Load params
+    with open("params.yaml", "r") as f:
+        params_full = yaml.safe_load(f)
+        params = params_full["train"]
 
+    model_type = params.get("model_type", "random_forest")
+    n_estimators = params["n_estimators"]
+    max_depth = params["max_depth"]
+    min_samples_split = params["min_samples_split"]
 
-def train(
-    params: dict,
-    data_path: str = "data/train_phase1.csv",
-    eval_path: str = "data/eval.csv",
-) -> float:
-    """
-    Huan luyen mo hinh va ghi nhan ket qua vao MLflow.
+    # Load data
+    train_df = pd.read_csv("data/train_phase1.csv")
+    eval_df = pd.read_csv("data/eval.csv")
 
-    Tham so:
-        params     : dict chua cac sieu tham so cho RandomForestClassifier.
-        data_path  : duong dan den file du lieu huan luyen.
-        eval_path  : duong dan den file du lieu danh gia.
+    X_train = train_df.drop("quality", axis=1)
+    y_train = train_df["quality"]
+    X_eval = eval_df.drop("quality", axis=1)
+    y_eval = eval_df["quality"]
 
-    Tra ve:
-        accuracy (float): do chinh xac tren tap danh gia.
-    """
+    # Start MLflow run
+    mlflow.set_experiment("Wine Quality MLOps")
+    
+    with mlflow.start_run(run_name=f"{model_type}_depth_{max_depth}"):
+        # Chon thu thuat toan (Bonus 2)
+        if model_type == "random_forest":
+            model = RandomForestClassifier(
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                min_samples_split=min_samples_split,
+                random_state=42
+            )
+        elif model_type == "gradient_boosting":
+            model = GradientBoostingClassifier(
+                n_estimators=n_estimators,
+                max_depth=max_depth,
+                random_state=42
+            )
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
 
-    # 1. Doc du lieu huan luyen va danh gia
-    df_train = pd.read_csv(data_path)
-    df_eval  = pd.read_csv(eval_path)
-
-    # 2. Tach dac trung (X) va nhan (y)
-    X_train = df_train.drop(columns=["target"])
-    y_train = df_train["target"]
-    X_eval  = df_eval.drop(columns=["target"])
-    y_eval  = df_eval["target"]
-
-    with mlflow.start_run():
-
-        # 3. Ghi nhan cac sieu tham so
-        mlflow.log_params(params)
-
-        # 4. Khoi tao va huan luyen RandomForestClassifier
-        model = RandomForestClassifier(**params, random_state=42)
         model.fit(X_train, y_train)
 
-        # 5. Du doan tren tap danh gia va tinh chi so
-        preds = model.predict(X_eval)
-        acc   = accuracy_score(y_eval, preds)
-        f1    = f1_score(y_eval, preds, average="weighted")
+        # Evaluation
+        y_pred = model.predict(X_eval)
+        acc = accuracy_score(y_eval, y_pred)
+        f1 = f1_score(y_eval, y_pred, average="weighted")
+        
+        # Confusion Matrix (Bonus 3)
+        cm = confusion_matrix(y_eval, y_pred)
+        print("\n--- CONFUSION MATRIX ---")
+        print(cm)
+        print("------------------------\n")
 
-        # 6. Ghi nhan chi so vao MLflow
+        # Logging
+        mlflow.log_params(params)
         mlflow.log_metric("accuracy", acc)
         mlflow.log_metric("f1_score", f1)
         mlflow.sklearn.log_model(model, "model")
 
-        # 7. In ket qua ra man hinh
-        print(f"Accuracy: {acc:.4f} | F1: {f1:.4f}")
+        print(f"Model: {model_type}, Accuracy: {acc:.4f}, F1: {f1:.4f}")
 
-        # 8. Luu metrics ra file outputs/metrics.json
+        # Save artifacts locally for pipeline usage
+        os.makedirs("models", exist_ok=True)
+        joblib.dump(model, "models/model.pkl")
+
         os.makedirs("outputs", exist_ok=True)
         with open("outputs/metrics.json", "w") as f:
             json.dump({"accuracy": acc, "f1_score": f1}, f)
 
-        # 9. Luu mo hinh ra file models/model.pkl
-        os.makedirs("models", exist_ok=True)
-        joblib.dump(model, "models/model.pkl")
-
-    # 10. Tra ve accuracy
-    return acc
-
-
 if __name__ == "__main__":
-    with open("params.yaml") as f:
-        params = yaml.safe_load(f)
-    train(params)
+    train()
