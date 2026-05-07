@@ -88,11 +88,13 @@ jobs:
         env:
           AWS_S3_BUCKET: ${{ secrets.CLOUD_BUCKET }}
 
-      - name: Save metrics as artifact
+      - name: Save metrics and report as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: metrics
-          path: outputs/metrics.json
+          name: model-performance
+          path: |
+            outputs/metrics.json
+            outputs/report.txt
 
 
   # ---------------------------------------------------------------------------
