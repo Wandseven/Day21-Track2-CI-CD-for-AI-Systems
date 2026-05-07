@@ -50,6 +50,7 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.CLOUD_CREDENTIALS_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUD_CREDENTIALS_SECRET }}
       AWS_DEFAULT_REGION: us-east-1
+      S3_BUCKET: ${{ secrets.CLOUD_BUCKET }}
       MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
       MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
       MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
@@ -66,6 +67,9 @@ jobs:
 
       - name: Pull data with DVC
         run: dvc pull data/train_phase1.csv.dvc data/eval.csv.dvc
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUD_CREDENTIALS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUD_CREDENTIALS_SECRET }}
 
       - name: Train model
         run: python src/train.py
@@ -77,16 +81,10 @@ jobs:
           echo "accuracy=$ACC" >> $GITHUB_OUTPUT
 
       - name: Upload model to S3
-        run: |
-          python - <<'EOF'
-          import boto3, os
-          s3 = boto3.client("s3")
-          bucket = os.environ["AWS_S3_BUCKET"]
-          s3.upload_file("models/model.pkl", bucket, "models/latest/model.pkl")
-          print(f"Model uploaded to s3://{bucket}/models/latest/model.pkl")
-          EOF
-        env:
-          AWS_S3_BUCKET: ${{ secrets.CLOUD_BUCKET }}
+        run: aws s3 cp models/model.pkl s3://$S3_BUCKET/models/latest/model.pkl
+
+      - name: Save latest metrics to S3 (for future comparison)
+        run: aws s3 cp outputs/metrics.json s3://$S3_BUCKET/metrics/latest.json
 
       - name: Save metrics and report as artifact
         uses: actions/upload-artifact@v4
@@ -107,15 +105,31 @@ jobs:
     needs: train
     runs-on: ubuntu-latest
     steps:
+      - name: Download metrics
+        uses: actions/download-artifact@v4
+        with:
+          name: model-performance
 
       - name: Check eval gate
         run: |
-          python - <<'EOF'
-          acc = float("${{ needs.train.outputs.accuracy }}")
-          if acc < 0.70:
-              raise SystemExit(f"FAILED: accuracy {acc:.4f} < 0.70. Huy deploy.")
-          print(f"PASSED: accuracy {acc:.4f} >= 0.70. Tien hanh deploy.")
-          EOF
+          ACCURACY=$(jq -r '.accuracy' metrics.json)
+          DEGRADED=$(jq -r '.degraded' metrics.json)
+          echo "Current accuracy: $ACCURACY"
+          echo "Is degraded: $DEGRADED"
+          
+          # Gate 1: Accuracy threshold
+          if (( $(echo "$ACCURACY < 0.70" | bc -l) )); then
+            echo "❌ FAILED: Accuracy $ACCURACY is below 0.70 threshold."
+            exit 1
+          fi
+          
+          # Gate 2: No regression (Bonus 4)
+          if [ "$DEGRADED" == "true" ]; then
+            echo "❌ FAILED: Accuracy has decreased compared to previous version. Deploy cancelled."
+            exit 1
+          fi
+          
+          echo "✅ SUCCESS: Model cleared all quality gates."
 
 
   # ---------------------------------------------------------------------------

@@ -7,12 +7,10 @@ from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classifi
 import joblib
 import os
 import json
+import boto3
+from botocore.exceptions import ClientError
 
 def train(params_dict=None, data_path=None, eval_path=None):
-    """
-    Huan luyen mo hinh. Co the nhan tham so truc tiep (cho Unit Test)
-    hoac tu dong doc tu params.yaml (cho Pipeline).
-    """
     # 1. Load params
     if params_dict is None:
         with open("params.yaml", "r") as f:
@@ -33,8 +31,6 @@ def train(params_dict=None, data_path=None, eval_path=None):
     train_df = pd.read_csv(train_p)
     eval_df = pd.read_csv(eval_p)
 
-    # Dung "quality" lam ten cot mac dinh (khop voi du lieu that)
-    # Neu unit test truyen vao dataset co cot "target", chung ta linh hoat doi ten
     for df in [train_df, eval_df]:
         if "target" in df.columns and "quality" not in df.columns:
             df.rename(columns={"target": "quality"}, inplace=True)
@@ -44,13 +40,24 @@ def train(params_dict=None, data_path=None, eval_path=None):
     X_eval = eval_df.drop("quality", axis=1)
     y_eval = eval_df["quality"]
 
+    # --- BONUS 5: Data Drift Warning ---
+    print("\n--- DATA DISTRIBUTION CHECK ---")
+    counts = y_train.value_counts(normalize=True)
+    dist_dict = counts.to_dict()
+    drift_warning = False
+    for label, ratio in dist_dict.items():
+        print(f"Class {label}: {ratio:.2%}")
+        if ratio < 0.10:
+            print(f"⚠️ WARNING: Class {label} is under-represented (< 10%)!")
+            drift_warning = True
+    if not drift_warning:
+        print("✅ Data distribution is balanced.")
+    print("--------------------------------\n")
+
     # 3. Start MLflow run
     mlflow.set_experiment("Wine Quality MLOps")
     
-    # Tracking URI, Username, Password se duoc lay tu bien moi truong (DagsHub)
-    
     with mlflow.start_run(run_name=f"{model_type}_depth_{max_depth}"):
-        # Chon thu thuat toan (Bonus 2)
         if model_type == "random_forest":
             model = RandomForestClassifier(
                 n_estimators=n_estimators,
@@ -78,35 +85,60 @@ def train(params_dict=None, data_path=None, eval_path=None):
         cm = confusion_matrix(y_eval, y_pred)
         print("\n--- CONFUSION MATRIX ---")
         print(cm)
-        print("------------------------\n")
-
-        # Precision/Recall Report (Bonus 3 extension)
+        
         report_text = classification_report(y_eval, y_pred)
-        print("--- CLASSIFICATION REPORT ---")
+        print("\n--- CLASSIFICATION REPORT ---")
         print(report_text)
         
+        # --- BONUS 4: Rollback Check ---
+        old_acc = 0.0
+        s3_bucket = os.getenv("S3_BUCKET")
+        if s3_bucket:
+            s3 = boto3.client("s3")
+            try:
+                s3.download_file(s3_bucket, "metrics/latest.json", "old_metrics.json")
+                with open("old_metrics.json", "r") as f:
+                    old_acc = json.load(f).get("accuracy", 0.0)
+                print(f"Previous Accuracy: {old_acc:.4f}")
+            except ClientError:
+                print("No previous metrics found on S3. Skipping comparison.")
+
+        print(f"Current Accuracy: {acc:.4f}")
+        
+        degraded = False
+        if acc < old_acc:
+            print("❌ ACCURACY DEGRADED! New model is worse than the current one.")
+            degraded = True
+        else:
+            print("✅ Accuracy improved or stable. Model is safe to deploy.")
+
+        # Save artifacts
         os.makedirs("outputs", exist_ok=True)
+        metrics_data = {
+            "accuracy": acc, 
+            "f1_score": f1, 
+            "distribution": {str(k): float(v) for k, v in dist_dict.items()},
+            "degraded": degraded
+        }
+        with open("outputs/metrics.json", "w") as f:
+            json.dump(metrics_data, f)
+            
         with open("outputs/report.txt", "w") as f:
             f.write(f"Model Type: {model_type}\n")
-            f.write(f"Accuracy: {acc:.4f}\n")
-            f.write(f"F1 Score: {f1:.4f}\n\n")
-            f.write("Confusion Matrix:\n")
-            f.write(str(cm))
-            f.write("\n\nClassification Report:\n")
-            f.write(report_text)
+            f.write(f"Accuracy: {acc:.4f} (Old: {old_acc:.4f})\n")
+            f.write(f"Status: {'DEGRADED' if degraded else 'IMPROVED'}\n\n")
+            f.write("Distribution:\n" + str(dist_dict) + "\n\n")
+            f.write("Confusion Matrix:\n" + str(cm) + "\n\n")
+            f.write("Classification Report:\n" + report_text)
 
-        # 5. Logging
+        # Logging
         mlflow.log_params(params)
         mlflow.log_metric("accuracy", acc)
         mlflow.log_metric("f1_score", f1)
         mlflow.sklearn.log_model(model, "model")
 
-        # 6. Save artifacts
         os.makedirs("models", exist_ok=True)
         joblib.dump(model, "models/model.pkl")
-
-        with open("outputs/metrics.json", "w") as f:
-            json.dump({"accuracy": acc, "f1_score": f1}, f)
 
         print(f"Done! Accuracy: {acc:.4f}")
         return acc
