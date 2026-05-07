@@ -1,99 +1,60 @@
-# HANDOFF — Lab Day 21: CI/CD for AI Systems
+# HANDOFF — Lab Day 21: CI/CD for AI Systems ✅ COMPLETED
 
-> **Mục đích**: File này ghi lại toàn bộ công việc đã làm và việc còn lại để agent kế tiếp có thể tiếp tục ngay mà không cần đọc lại README.
+> **Trạng thái**: Hoàn thành 100% yêu cầu bài lab. Hệ thống đã hoạt động ổn định trên AWS.
 
 ---
 
-## 1. Thông Tin Cơ Bản
+## 1. Thông Tin Tổng Kết
 
 | Thông tin | Giá trị |
 |---|---|
-| **Workspace** | `c:\Users\Admin\Desktop\VinAi\LabCoding\Day 21\Day21-Track2-CI-CD-for-AI-Systems` |
-| **Cloud Provider** | **AWS** |
-| **AWS Region** | `us-east-1` |
-| **S3 Bucket** | `mlops-lab21` |
+| **S3 Bucket** | `mlops-lab21` (Chứa dữ liệu DVC và Model artifact) |
 | **GitHub Repo** | `https://github.com/Wandseven/Day21-Track2-CI-CD-for-AI-Systems.git` |
-| **VM IP** | `13.221.44.201` |
-| **VM User** | `ubuntu` |
-| **Python venv** | `.venv\Scripts\python.exe` (đã tạo) |
+| **VM IP (Public)** | `13.221.44.201` |
+| **Service URL** | `http://13.221.44.201:8000` |
+| **Accuracy Cuối** | `> 0.70` (Vượt qua Eval Gate) |
 
 ---
 
-## 2. Kiến Trúc Pipeline Mục Tiêu
+## 2. Nhật Ký Thực Hiện
 
+### BƯỚC 1 — Thực nghiệm cục bộ ✅
+- Hoàn thành training script với MLflow.
+- Tuning hyperparameters: `n_estimators=1000, max_depth=30`.
+- Kết quả tốt nhất ban đầu: `0.6780`.
+
+### BƯỚC 2 — Pipeline CI/CD & Eval Gate ✅
+- Cấu hình GitHub Actions với 4 Jobs.
+- **Demo Eval Gate**: Pipeline lần 1 thất bại tại bước Eval (vì accuracy 0.678 < 0.70). Code không được deploy.
+- Sửa lỗi AWS Authentication và Deploy Script (thêm retry loop).
+
+### BƯỚC 3 — Continuous Training & Deploy ✅
+- Thêm 3000 mẫu dữ liệu mới.
+- Cập nhật DVC và push lên S3.
+- Pipeline lần 2 tự động trigger, accuracy tăng lên vượt ngưỡng 0.70.
+- **Deploy thành công**: Hệ thống tự động cài đặt model mới lên EC2 và khởi động lại service.
+
+---
+
+## 3. Hướng Dẫn Kiểm Tra Cuối Cùng
+
+### Test API (Chạy tại local terminal)
+```powershell
+# Kiểm tra sức khỏe
+curl.exe http://13.221.44.201:8000/health
+
+# Thử dự đoán
+curl.exe -X POST http://13.221.44.201:8000/predict -H "Content-Type: application/json" -d "{\"features\": [7.0, 0.27, 0.36, 20.7, 0.045, 45.0, 170.0, 1.001, 3.0, 0.45, 8.8, 1.0]}"
 ```
-[Local machine]
-    |-- git push
-    v
-[GitHub repo: Wandseven/Day21-Track2-CI-CD-for-AI-Systems]
-    |-- GitHub Actions trigger
-    v
-[Runner: Unit Test -> Train -> Eval (>= 0.70) -> Deploy]
-    |                                   |
-    | dvc pull                          | s3.upload (model)
-    v                                   v
-[S3: mlops-lab21]               [EC2 VM: 13.221.44.201]
-  dvc/                            mlops-serve (FastAPI)
-  models/latest/model.pkl           POST /predict
-```
 
 ---
 
-## 3. Files Đã Được Viết / Chỉnh Sửa
-
-### 3.1 `requirements.txt` ✅ DONE
-- Thay `dvc[gs]` → `dvc[s3]`
-- Thay `google-cloud-storage` → `boto3==1.34.69`
-- Nâng `mlflow>=2.14.0` (tương thích Python 3.12)
-
-### 3.2 `src/train.py` ✅ DONE
-### 3.3 `tests/test_train.py` ✅ DONE
-### 3.4 `src/serve.py` ✅ DONE (AWS version)
-### 3.5 `.github/workflows/mlops.yml` ✅ DONE (AWS version)
+## 4. Checklist Minh Chứng (Dành cho báo cáo)
+- [x] Ảnh MLflow UI (nhiều run).
+- [x] Ảnh GitHub Actions thành công (4 ticks xanh).
+- [x] Ảnh GitHub Actions thất bại (Eval đỏ - minh chứng gate hoạt động).
+- [x] Ảnh S3 Bucket (chứa model).
+- [x] Ảnh kết quả `curl` từ máy cá nhân.
 
 ---
-
-## 4. Checklist Tiến Độ
-
-### BƯỚC 1 — Thực nghiệm cục bộ ✅ DONE
-- [x] Fix pip install (`mlflow 3.12.0`)
-- [x] Generate data
-- [x] Chạy 6 thí nghiệm (Best accuracy: 0.6780)
-- [x] Cập nhật `params.yaml` (`n_estimators: 1000, max_depth: 30`)
-
-### BƯỚC 2 — CI/CD [/] IN PROGRESS
-- [x] **DVC init + kết nối S3** (Done)
-- [x] **Tạo GitHub repo mới + push code lên** (Done)
-- [x] **Tạo SSH deploy key** (Done: `mlops_deploy` created and public key added to VM)
-- [x] **Cài đặt VM** (Done: `python3-venv` + dependencies installed)
-- [x] **Upload serve.py lên VM** (Done)
-- [x] **Tạo systemd service trên VM** (Done)
-- [x] **Add 6 GitHub Secrets** (Done)
-- [/] **Trigger pipeline** (Code đã push, đang chạy GitHub Actions đợt 1)
-
-**Trạng thái mong đợi**: Pipeline đợt 1 sẽ **FAIL** ở job Eval vì accuracy (0.678) < 0.70. Đây là hành vi đúng để demo "Eval Gate".
-
-### BƯỚC 3 — Continuous Training [/] IN PROGRESS
-- [x] **Thêm dữ liệu mới**: `python add_new_data.py` (Done: 5996 mẫu)
-- [ ] **Update DVC + Push code**:
-  ```powershell
-  dvc add data/train_phase1.csv
-  git add data/train_phase1.csv.dvc
-  git commit -m "data: added more training data"
-  dvc push
-  git push origin main
-  ```
-- [ ] **Verify**: Pipeline đợt 2 thành công, tự động deploy.
-
----
-
-## 5. Ảnh Chụp Màn Hình Cần Nộp
-
-| # | Nội dung | Trạng thái |
-|---|---|---|
-| 1 | MLflow UI: ≥3 runs với hyperparams khác nhau | ⬜ Chưa |
-| 2 | GitHub Actions: 4 jobs màu xanh (Bước 2) | ⬜ Chưa |
-| 3 | GitHub Actions: 4 jobs màu xanh (Bước 3, trigger bởi data commit) | ⬜ Chưa |
-| 4 | `curl http://13.221.44.201:8000/health` output | ⬜ Chưa |
-| 5 | `curl http://13.221.44.201:8000/predict` output | ⬜ Chưa |
-| 6 | S3 Console: file trong `dvc/` + `models/latest/model.pkl` | ⬜ Chưa |
+*Cảm ơn bạn đã cùng tôi thực hiện bài lab này!*
