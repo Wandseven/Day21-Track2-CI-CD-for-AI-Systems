@@ -11,3 +11,6 @@ sa-key.json
 __pycache__/
 *.pyc
 .DS_Store
+lab_config.md
+mlops_deploy
+mlops_deploy.pub
