@@ -45,6 +45,11 @@ jobs:
     outputs:
       accuracy: ${{ steps.read_metrics.outputs.accuracy }}
 
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.CLOUD_CREDENTIALS_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUD_CREDENTIALS_SECRET }}
+      AWS_DEFAULT_REGION: us-east-1
+
     steps:
       - uses: actions/checkout@v4
 
@@ -54,12 +59,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Authenticate to AWS
-        run: |
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.CLOUD_CREDENTIALS_KEY }}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.CLOUD_CREDENTIALS_SECRET }}" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=us-east-1" >> $GITHUB_ENV
 
       - name: Pull data with DVC
         run: dvc pull data/train_phase1.csv.dvc data/eval.csv.dvc
